@@ -3,9 +3,11 @@ import asyncio
 import os
 from telegram import Update
 from telegram.ext import (
-    Application, ApplicationBuilder,
-    CommandHandler, MessageHandler,
-    ContextTypes, filters
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
 )
 from flask import Flask, request
 
@@ -13,7 +15,6 @@ logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = "7740910314:AAEzgnRxolPt3h-El0PHdfJFYBvc9cqiGIU"
 WEBHOOK_URL = "https://rafflecalcbot-production-46d1.up.railway.app"
-
 PORT = int(os.environ.get("PORT", 8443))
 
 app_flask = Flask(__name__)
@@ -38,12 +39,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "بعد از اون، ازت می‌پرسم چندتا تیکت می‌خوای بخری، و نتیجه‌ی دقیق رو بهت می‌گم. 😊",
         parse_mode='Markdown'
     )
-    # پاک کردن داده‌های قبلی اگر بود
     user_data.pop(update.effective_chat.id, None)
 
 async def reset_user_data(chat_id):
-    if chat_id in user_data:
-        user_data.pop(chat_id)
+    user_data.pop(chat_id, None)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -75,7 +74,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             for part in prize_parts:
                 if ":" not in part:
-                    raise ValueError("فرمت جایزه نادرست")
+                    raise ValueError("فرمت جایزه نادرست است.")
                 value_str, count_str = part.strip().split(":")
                 value = float(value_str)
                 count = int(count_str)
@@ -87,10 +86,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ticket_price = float(ticket_price_line)
 
             if total_tickets <= 0 or ticket_price <= 0 or total_prizes <= 0:
-                raise ValueError("مقادیر باید مثبت باشند")
+                raise ValueError("مقادیر باید مثبت باشند.")
 
             if total_prizes > total_tickets:
-                raise ValueError("تعداد جوایز نمی‌تواند بیشتر از تعداد کل تیکت‌ها باشد")
+                raise ValueError("تعداد جوایز نمی‌تواند بیشتر از تعداد کل تیکت‌ها باشد.")
 
             chance_per_ticket = total_prizes / total_tickets
             expected_return_per_ticket = total_reward_value / total_tickets
@@ -199,18 +198,36 @@ def webhook():
 def index():
     return "Hello, this is Telegram bot webhook."
 
-# ------------------ تنظیم webhook هنگام استارت اپ ------------------ #
+# ------------------ تنظیم webhook هنگام استارت آپ ------------------ #
 
 async def on_startup(app):
-    await app.bot.set_webhook(WEBHOOK_URL + "/" + BOT_TOKEN)
+    await app_telegram.bot.set_webhook(WEBHOOK_URL + "/" + BOT_TOKEN)
     logging.info("Webhook تنظیم شد روی: %s/%s", WEBHOOK_URL, BOT_TOKEN)
+
+# اضافه کردن هندلرها و ثبت رویدادهای استارت‌آپ
 
 app_telegram.add_handler(CommandHandler("start", start))
 app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-app_telegram.run_webhook(
-    listen="0.0.0.0",
-    port=PORT,
-    webhook_url=WEBHOOK_URL + "/" + BOT_TOKEN,
-    on_startup=on_startup
-)
+app_telegram.post_init(on_startup)
+
+# اجرای وب‌هوک
+
+if __name__ == "__main__":
+    import uvicorn
+    # اجرای Flask و Telegram bot webhook در یک پروسه
+    # معمولاً باید Flask و bot را جداگانه اجرا کنید، اما این روش به صورت ساده‌شده است.
+
+    from threading import Thread
+
+    def run_flask():
+        app_flask.run(host="0.0.0.0", port=PORT)
+
+    flask_thread = Thread(target=run_flask)
+    flask_thread.start()
+
+    app_telegram.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=WEBHOOK_URL + "/" + BOT_TOKEN,
+    )
