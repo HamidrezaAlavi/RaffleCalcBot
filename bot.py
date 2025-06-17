@@ -1,60 +1,103 @@
-import os
+import logging
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-TOKEN = os.environ.get("BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("BOT_TOKEN environment variable not set")
+logging.basicConfig(level=logging.INFO)
 
-def calculate_odds(prizes: dict, total_tickets: int, ticket_price: float):
-    total_value = 0
-    total_prizes = 0
-    for price_str, count in prizes.items():
-        price = float(price_str)
-        total_value += price * count
-        total_prizes += count
-
-    win_prob = total_prizes / total_tickets if total_tickets else 0
-    avg_prize_value = total_value / total_prizes if total_prizes else 0
-
-    risk_to_reward = (ticket_price / win_prob) / avg_prize_value if win_prob and avg_prize_value else float("inf")
-    return win_prob, risk_to_reward
+user_data = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "سلام! لطفاً اطلاعات قرعه‌کشی را در ۳ خط بفرست:\n"
-        "مثال:\n"
-        "10:5,15:3\n"
-        "100\n"
-        "0.2"
+        "🎉 به ربات محاسبه‌گر شانس قرعه‌کشی خوش اومدی!\n\n"
+        "این ربات بهت کمک می‌کنه که شانس بردن در قرعه‌کشی‌های تلگرامی رو حساب کنی و ببینی آیا ارزش شرکت کردن داره یا نه.\n\n"
+        "🔢 لطفاً اطلاعات قرعه‌کشی رو در **سه خط جداگانه** ارسال کن به این شکل:\n\n"
+        "`10:5,15:3`\n"
+        "`100`\n"
+        "`0.2`\n\n"
+        "📌 توضیحات:\n"
+        "1️⃣ خط اول: لیست جوایز به فرمت `قیمت:تعداد` جدا شده با کاما (،)\n"
+        "2️⃣ خط دوم: تعداد کل تیکت‌هایی که همه شرکت‌کننده‌ها خریدن\n"
+        "3️⃣ خط سوم: قیمت هر تیکت (به دلار)\n\n"
+        "بعد از اون، ازت می‌پرسم چندتا تیکت می‌خوای بخری، و نتیجه‌ی دقیق رو بهت می‌گم. 😊"
     )
 
-async def calculate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lines = update.message.text.strip().split("\n")
-    if len(lines) != 3:
-        await update.message.reply_text("فرمت اشتباه است. لطفاً دقیقاً ۳ خط وارد کن.")
-        return
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message.text.strip()
 
-    try:
-        prizes_raw = lines[0].split(",")
-        prizes = {price.strip(): int(count.strip()) for price, count in (item.split(":") for item in prizes_raw)}
-        total_tickets = int(lines[1].strip())
-        ticket_price = float(lines[2].strip())
+    if chat_id not in user_data:
+        user_data[chat_id] = {"step": 1, "inputs": []}
 
-        win_prob, risk_to_reward = calculate_odds(prizes, total_tickets, ticket_price)
+    data = user_data[chat_id]
 
-        await update.message.reply_text(
-            f"📊 احتمال برد: {win_prob * 100:.2f}%\n"
-            f"📉 ریسک به ریوارد: {risk_to_reward:.2f}"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"خطا: {e}")
+    if data["step"] <= 3:
+        data["inputs"].append(message)
+        data["step"] += 1
 
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, calculate))
-    app.run_polling()
+    if data["step"] == 4:
+        try:
+            prizes_line, total_tickets_line, ticket_price_line = data["inputs"]
+            prize_parts = prizes_line.split(",")
 
-if __name__ == "__main__":
-    main()
+            prizes = []
+            total_reward_value = 0
+            total_prizes = 0
+
+            for part in prize_parts:
+                value, count = map(float, part.strip().split(":"))
+                prizes.append((value, int(count)))
+                total_reward_value += value * int(count)
+                total_prizes += int(count)
+
+            total_tickets = int(total_tickets_line)
+            ticket_price = float(ticket_price_line)
+
+            chance_per_ticket = total_prizes / total_tickets
+            expected_return_per_ticket = total_reward_value / total_tickets
+            risk_to_reward = expected_return_per_ticket / ticket_price
+
+            data["results"] = {
+                "chance_per_ticket": chance_per_ticket,
+                "risk_to_reward": risk_to_reward,
+                "ticket_price": ticket_price
+            }
+
+            await update.message.reply_text(
+                f"📊 احتمال برد هر تیکت: **{chance_per_ticket * 100:.2f}%**\n"
+                f"📉 نسبت ریسک به ریوارد: **{risk_to_reward:.2f}**\n\n"
+                "🎟️ حالا بگو چندتا تیکت می‌خوای بخری؟"
+            )
+            data["step"] = 5
+
+        except Exception as e:
+            await update.message.reply_text("⚠️ فرمت اطلاعاتی که دادی نادرسته. لطفاً با دستور /start دوباره شروع کن.")
+            user_data.pop(chat_id)
+
+    elif data["step"] == 5:
+        try:
+            count = int(message)
+            chance = data["results"]["chance_per_ticket"]
+            rtr = data["results"]["risk_to_reward"]
+            price = data["results"]["ticket_price"]
+
+            total_chance = 1 - ((1 - chance) ** count)
+            total_cost = count * price
+            expected_gain = count * chance * (rtr * price)
+
+            await update.message.reply_text(
+                f"🎟️ تعداد تیکت: **{count}**\n\n"
+                f"✅ شانس برد کلی: **{total_chance * 100:.2f}%**\n"
+                f"📉 نسبت ریسک به ریوارد: **{rtr:.2f}**\n"
+                f"💸 مجموع هزینه: **{total_cost:.2f}$**\n"
+            )
+            user_data.pop(chat_id)
+
+        except:
+            await update.message.reply_text("❌ لطفاً فقط یک عدد معتبر برای تعداد تیکت وارد کن.")
+
+app = ApplicationBuilder().token("توکن بات اینجا").build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+app.run_polling()
