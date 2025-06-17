@@ -13,13 +13,17 @@ from flask import Flask, request
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = "7740910314:AAEzgnRxolPt3h-El0PHdfJFYBvc9cqiGIU"
-WEBHOOK_URL = "https://rafflecalcbot-production-46d1.up.railway.app"
-PORT = int(os.environ.get("PORT", 8443))
+# حذف توکن از کد و استفاده از متغیر محیطی
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://rafflecalcbot-production-46d1.up.railway.app")
+PORT = int(os.environ.get("PORT", 8000))
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is required")
 
 app_flask = Flask(__name__)
-app_telegram = ApplicationBuilder().token(BOT_TOKEN).build()
 
+# ذخیره user_data در متغیر سراسری
 user_data = {}
 
 # ------------------ دستورات ربات ------------------ #
@@ -186,48 +190,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             await update.message.reply_text("❌ خطا در پردازش. لطفاً /start را بزن و دوباره تلاش کن.")
 
+# ------------------ ایجاد Application ------------------ #
+application = ApplicationBuilder().token(BOT_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
 # ------------------ Webhook های Flask ------------------ #
 
 @app_flask.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
-    update = Update.de_json(request.get_json(force=True), app_telegram.bot)
-    asyncio.run(app_telegram.update_queue.put(update))
-    return "OK"
+    try:
+        json_data = request.get_json(force=True)
+        update = Update.de_json(json_data, application.bot)
+        asyncio.create_task(application.process_update(update))
+        return "OK", 200
+    except Exception as e:
+        logging.error(f"Error in webhook: {e}")
+        return "Error", 500
 
 @app_flask.route("/")
 def index():
-    return "Hello, this is Telegram bot webhook."
+    return "Telegram Bot is running!", 200
 
-# ------------------ تنظیم webhook هنگام استارت آپ ------------------ #
+@app_flask.route("/health")
+def health():
+    return "OK", 200
 
-async def on_startup(app):
-    await app_telegram.bot.set_webhook(WEBHOOK_URL + "/" + BOT_TOKEN)
-    logging.info("Webhook تنظیم شد روی: %s/%s", WEBHOOK_URL, BOT_TOKEN)
+# ------------------ تنظیم webhook ------------------ #
 
-# اضافه کردن هندلرها و ثبت رویدادهای استارت‌آپ
+async def setup_webhook():
+    try:
+        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        await application.bot.set_webhook(webhook_url)
+        logging.info(f"Webhook set to: {webhook_url}")
+    except Exception as e:
+        logging.error(f"Failed to set webhook: {e}")
 
-app_telegram.add_handler(CommandHandler("start", start))
-app_telegram.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-app_telegram.post_init(on_startup)
-
-# اجرای وب‌هوک
+# ------------------ اجرای برنامه ------------------ #
 
 if __name__ == "__main__":
-    import uvicorn
-    # اجرای Flask و Telegram bot webhook در یک پروسه
-    # معمولاً باید Flask و bot را جداگانه اجرا کنید، اما این روش به صورت ساده‌شده است.
-
-    from threading import Thread
-
-    def run_flask():
-        app_flask.run(host="0.0.0.0", port=PORT)
-
-    flask_thread = Thread(target=run_flask)
-    flask_thread.start()
-
-    app_telegram.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL + "/" + BOT_TOKEN,
-    )
+    # تنظیم webhook
+    asyncio.run(setup_webhook())
+    
+    # اجرای Flask
+    logging.info(f"Starting Flask app on port {PORT}")
+    app_flask.run(host="0.0.0.0", port=PORT, debug=False)
