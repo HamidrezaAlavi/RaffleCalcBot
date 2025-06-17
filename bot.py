@@ -1,237 +1,49 @@
-import logging
-import asyncio
 import os
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-from flask import Flask, request
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
-logging.basicConfig(level=logging.INFO)
+TOKEN = os.getenv("BOT_TOKEN")
 
-# حذف توکن از کد و استفاده از متغیر محیطی
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "https://rafflecalcbot-production-46d1.up.railway.app")
-PORT = int(os.environ.get("PORT", 8000))
+def analyze_lottery(prizes, total_tickets, ticket_price):
+    total_prizes = sum([count for count, _ in prizes])
+    total_value = sum([count * value for count, value in prizes])
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable is required")
+    p_win = total_prizes / total_tickets
+    ev = total_value / total_tickets
+    rr = ticket_price / ev if ev != 0 else float('inf')
 
-app_flask = Flask(__name__)
-
-# ذخیره user_data در متغیر سراسری
-user_data = {}
-
-# ------------------ دستورات ربات ------------------ #
+    return {
+        'probability_of_winning': round(p_win * 100, 2),
+        'expected_value': round(ev, 4),
+        'risk_to_reward': round(rr, 2)
+    }
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🎉 به ربات محاسبه‌گر شانس قرعه‌کشی خوش اومدی!\n\n"
-        "این ربات بهت کمک می‌کنه که شانس بردن در قرعه‌کشی‌های تلگرامی رو حساب کنی و ببینی آیا ارزش شرکت کردن داره یا نه.\n\n"
-        "🔢 لطفاً اطلاعات قرعه‌کشی رو در *سه خط جداگانه* ارسال کن به این شکل:\n\n"
-        "`10:5,15:3`\n"
-        "`100`\n"
-        "`0.2`\n\n"
-        "📌 توضیحات:\n"
-        "1️⃣ خط اول: لیست جوایز به فرمت `قیمت:تعداد` جدا شده با کاما (،)\n"
-        "2️⃣ خط دوم: تعداد کل تیکت‌هایی که همه شرکت‌کننده‌ها خریدن\n"
-        "3️⃣ خط سوم: قیمت هر تیکت (به دلار)\n\n"
-        "بعد از اون، ازت می‌پرسم چندتا تیکت می‌خوای بخری، و نتیجه‌ی دقیق رو بهت می‌گم. 😊",
-        parse_mode='Markdown'
-    )
-    user_data.pop(update.effective_chat.id, None)
+    await update.message.reply_text("سلام! فرمت پیام:\n\nجوایز: 5x10,3x15\nتعداد تیکت: 1000\nقیمت تیکت: 0.2")
 
-async def reset_user_data(chat_id):
-    user_data.pop(chat_id, None)
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    message = update.message.text.strip()
-
-    if chat_id not in user_data:
-        user_data[chat_id] = {"step": 1, "inputs": []}
-
-    data = user_data[chat_id]
-
-    if data["step"] <= 3:
-        data["inputs"].append(message)
-
-        if data["step"] == 1:
-            await update.message.reply_text("✅ جوایز دریافت شد. حالا تعداد کل تیکت‌ها رو وارد کن:")
-        elif data["step"] == 2:
-            await update.message.reply_text("✅ تعداد کل تیکت‌ها دریافت شد. حالا قیمت هر تیکت رو وارد کن:")
-
-        data["step"] += 1
-
-    elif data["step"] == 4:
-        try:
-            prizes_line, total_tickets_line, ticket_price_line = data["inputs"]
-
-            prize_parts = prizes_line.replace("،", ",").split(",")
-            prizes = []
-            total_reward_value = 0
-            total_prizes = 0
-
-            for part in prize_parts:
-                if ":" not in part:
-                    raise ValueError("فرمت جایزه نادرست است.")
-                value_str, count_str = part.strip().split(":")
-                value = float(value_str)
-                count = int(count_str)
-                prizes.append((value, count))
-                total_reward_value += value * count
-                total_prizes += count
-
-            total_tickets = int(total_tickets_line)
-            ticket_price = float(ticket_price_line)
-
-            if total_tickets <= 0 or ticket_price <= 0 or total_prizes <= 0:
-                raise ValueError("مقادیر باید مثبت باشند.")
-
-            if total_prizes > total_tickets:
-                raise ValueError("تعداد جوایز نمی‌تواند بیشتر از تعداد کل تیکت‌ها باشد.")
-
-            chance_per_ticket = total_prizes / total_tickets
-            expected_return_per_ticket = total_reward_value / total_tickets
-            risk_to_reward = expected_return_per_ticket / ticket_price
-
-            data["results"] = {
-                "chance_per_ticket": chance_per_ticket,
-                "risk_to_reward": risk_to_reward,
-                "ticket_price": ticket_price,
-                "expected_return_per_ticket": expected_return_per_ticket,
-                "total_tickets": total_tickets,
-                "total_prizes": total_prizes,
-                "total_reward_value": total_reward_value
-            }
-
-            evaluation = ""
-            if risk_to_reward > 1.0:
-                evaluation = "🟢 *عالی!* احتمالاً سودآور است"
-            elif risk_to_reward > 0.7:
-                evaluation = "🟡 *متوسط* - ممکن است ارزش داشته باشد"
-            else:
-                evaluation = "🔴 *ریسکی* - احتمالاً زیان‌آور است"
-
-            await update.message.reply_text(
-                f"📊 *نتایج تحلیل:*\n\n"
-                f"🎯 احتمال برد هر تیکت: *{chance_per_ticket * 100:.2f}%*\n"
-                f"💰 بازگشت متوقع هر تیکت: *${expected_return_per_ticket:.3f}*\n"
-                f"📈 نسبت ریسک به ریوارد: *{risk_to_reward:.2f}*\n\n"
-                f"{evaluation}\n\n"
-                f"🎟️ حالا بگو چندتا تیکت می‌خوای بخری؟\n"
-                f"_(یا /start برای شروع دوباره)_",
-                parse_mode='Markdown'
-            )
-            data["step"] = 5
-
-        except ValueError as ve:
-            await update.message.reply_text(
-                f"⚠️ خطا در داده‌ها: {str(ve)}\nلطفاً با دستور /start دوباره شروع کن.",
-                parse_mode='Markdown'
-            )
-            await reset_user_data(chat_id)
-        except Exception:
-            await update.message.reply_text(
-                "⚠️ فرمت اطلاعاتی که دادی نادرسته.\n"
-                "مثال صحیح:\n"
-                "`10:5,15:3` (جوایز)\n"
-                "`100` (تعداد کل تیکت‌ها)\n"
-                "`0.2` (قیمت هر تیکت)\n\n"
-                "لطفاً با دستور /start دوباره شروع کن.",
-                parse_mode='Markdown'
-            )
-            await reset_user_data(chat_id)
-
-    elif data["step"] == 5:
-        try:
-            count = int(message)
-
-            if count <= 0:
-                await update.message.reply_text("❌ تعداد تیکت باید عدد مثبت باشد!")
-                return
-
-            results = data["results"]
-            chance = results["chance_per_ticket"]
-            rtr = results["risk_to_reward"]
-            price = results["ticket_price"]
-            expected_return = results["expected_return_per_ticket"]
-
-            total_chance = 1 - ((1 - chance) ** count)
-            total_cost = count * price
-            expected_total_return = count * expected_return
-            expected_profit = expected_total_return - total_cost
-
-            status_emoji = "🟢" if expected_profit > 0 else "🔴"
-            profit_text = f"سود متوقع: *${expected_profit:.2f}*" if expected_profit > 0 else f"زیان متوقع: *${abs(expected_profit):.2f}*"
-
-            await update.message.reply_text(
-                f"🎟️ *نتیجه نهایی برای {count} تیکت:*\n\n"
-                f"✅ شانس برد کلی: *{total_chance * 100:.2f}%*\n"
-                f"💸 مجموع هزینه: *${total_cost:.2f}*\n"
-                f"💰 بازگشت متوقع: *${expected_total_return:.2f}*\n"
-                f"{status_emoji} {profit_text}\n"
-                f"📈 نسبت ریسک به ریوارد: *{rtr:.2f}*\n\n"
-                f"_برای قرعه‌کشی جدید از /start استفاده کن_",
-                parse_mode='Markdown'
-            )
-
-            await reset_user_data(chat_id)
-
-        except ValueError:
-            await update.message.reply_text(
-                "❌ لطفاً فقط یک عدد صحیح معتبر برای تعداد تیکت وارد کن.\nمثال: `5`",
-                parse_mode='Markdown'
-            )
-        except Exception:
-            await update.message.reply_text("❌ خطا در پردازش. لطفاً /start را بزن و دوباره تلاش کن.")
-
-# ------------------ ایجاد Application ------------------ #
-application = ApplicationBuilder().token(BOT_TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# ------------------ Webhook های Flask ------------------ #
-
-@app_flask.route(f"/{BOT_TOKEN}", methods=["POST"])
-def webhook():
+async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        json_data = request.get_json(force=True)
-        update = Update.de_json(json_data, application.bot)
-        asyncio.create_task(application.process_update(update))
-        return "OK", 200
-    except Exception as e:
-        logging.error(f"Error in webhook: {e}")
-        return "Error", 500
+        lines = update.message.text.split('\n')
+        prize_line = next(l for l in lines if 'x' in l)
+        ticket_line = next(l for l in lines if 'تیکت' in l)
+        price_line = next(l for l in lines if 'قیمت' in l)
 
-@app_flask.route("/")
-def index():
-    return "Telegram Bot is running!", 200
+        prizes = [(int(p.split('x')[0]), float(p.split('x')[1])) for p in prize_line.split(':')[1].split(',')]
+        total_tickets = int(ticket_line.split(':')[1])
+        ticket_price = float(price_line.split(':')[1])
 
-@app_flask.route("/health")
-def health():
-    return "OK", 200
+        result = analyze_lottery(prizes, total_tickets, ticket_price)
 
-# ------------------ تنظیم webhook ------------------ #
+        await update.message.reply_text(
+            f"📌 احتمال برد: {result['probability_of_winning']}٪\n"
+            f"💰 ارزش مورد انتظار: {result['expected_value']} $\n"
+            f"⚖️ ریسک به ریوارد: {result['risk_to_reward']}"
+        )
+    except:
+        await update.message.reply_text("❌ فرمت اشتباهه! فرمت نمونه:\nجوایز: 5x10,3x15\nتعداد تیکت: 1000\nقیمت تیکت: 0.2")
 
-async def setup_webhook():
-    try:
-        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
-        await application.bot.set_webhook(webhook_url)
-        logging.info(f"Webhook set to: {webhook_url}")
-    except Exception as e:
-        logging.error(f"Failed to set webhook: {e}")
-
-# ------------------ اجرای برنامه ------------------ #
-
-if __name__ == "__main__":
-    # تنظیم webhook
-    asyncio.run(setup_webhook())
-    
-    # اجرای Flask
-    logging.info(f"Starting Flask app on port {PORT}")
-    app_flask.run(host="0.0.0.0", port=PORT, debug=False)
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_input))
+    app.run_polling()
