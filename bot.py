@@ -1,50 +1,60 @@
-Python 3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)] on win32
-Enter "help" below or click "Help" above for more information.
 import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.environ.get("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("BOT_TOKEN environment variable not set")
 
-def analyze_lottery(prizes, total_tickets, ticket_price):
-    total_prizes = sum([count for count, _ in prizes])
-    total_value = sum([count * value for count, value in prizes])
+def calculate_odds(prizes: dict, total_tickets: int, ticket_price: float):
+    total_value = 0
+    total_prizes = 0
+    for price_str, count in prizes.items():
+        price = float(price_str)
+        total_value += price * count
+        total_prizes += count
 
-    p_win = total_prizes / total_tickets
-    ev = total_value / total_tickets
-    rr = ticket_price / ev if ev != 0 else float('inf')
-... 
-...     return {
-...         'probability_of_winning': round(p_win * 100, 2),
-...         'expected_value': round(ev, 4),
-...         'risk_to_reward': round(rr, 2)
-...     }
-... 
-... async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-...     await update.message.reply_text("سلام! فرمت پیام:\n\nجوایز: 5x10,3x15\nتعداد تیکت: 1000\nقیمت تیکت: 0.2")
-... 
-... async def handle_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-...     try:
-...         lines = update.message.text.split('\n')
-...         prize_line = next(l for l in lines if 'x' in l)
-...         ticket_line = next(l for l in lines if 'تیکت' in l)
-...         price_line = next(l for l in lines if 'قیمت' in l)
-... 
-...         prizes = [(int(p.split('x')[0]), float(p.split('x')[1])) for p in prize_line.split(':')[1].split(',')]
-...         total_tickets = int(ticket_line.split(':')[1])
-...         ticket_price = float(price_line.split(':')[1])
-... 
-...         result = analyze_lottery(prizes, total_tickets, ticket_price)
-... 
-...         await update.message.reply_text(
-...             f"📌 احتمال برد: {result['probability_of_winning']}٪\n"
-...             f"💰 ارزش مورد انتظار: {result['expected_value']} $\n"
-...             f"⚖️ ریسک به ریوارد: {result['risk_to_reward']}"
-...         )
-...     except:
-...         await update.message.reply_text("❌ فرمت اشتباهه! فرمت نمونه:\nجوایز: 5x10,3x15\nتعداد تیکت: 1000\nقیمت تیکت: 0.2")
-... 
-... if __name__ == '__main__':
-...     app = ApplicationBuilder().token(TOKEN).build()
-...     app.add_handler(CommandHandler("start", start))
-...     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_input))
+    win_prob = total_prizes / total_tickets if total_tickets else 0
+    avg_prize_value = total_value / total_prizes if total_prizes else 0
+
+    risk_to_reward = (ticket_price / win_prob) / avg_prize_value if win_prob and avg_prize_value else float("inf")
+    return win_prob, risk_to_reward
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "سلام! لطفاً اطلاعات قرعه‌کشی را در ۳ خط بفرست:\n"
+        "مثال:\n"
+        "10:5,15:3\n"
+        "100\n"
+        "0.2"
+    )
+
+async def calculate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lines = update.message.text.strip().split("\n")
+    if len(lines) != 3:
+        await update.message.reply_text("فرمت اشتباه است. لطفاً دقیقاً ۳ خط وارد کن.")
+        return
+
+    try:
+        prizes_raw = lines[0].split(",")
+        prizes = {price.strip(): int(count.strip()) for price, count in (item.split(":") for item in prizes_raw)}
+        total_tickets = int(lines[1].strip())
+        ticket_price = float(lines[2].strip())
+
+        win_prob, risk_to_reward = calculate_odds(prizes, total_tickets, ticket_price)
+
+        await update.message.reply_text(
+            f"📊 احتمال برد: {win_prob * 100:.2f}%\n"
+            f"📉 ریسک به ریوارد: {risk_to_reward:.2f}"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"خطا: {e}")
+
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, calculate))
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
