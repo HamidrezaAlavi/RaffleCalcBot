@@ -11,8 +11,8 @@ from flask import Flask, request
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.getenv(7740910314:AAEzgnRxolPt3h-El0PHdfJFYBvc9cqiGIU)
-WEBHOOK_URL = os.getenv(https://rafflecalcbot-production-46d1.up.railway.app)
+BOT_TOKEN = "7740910314:AAEzgnRxolPt3h-El0PHdfJFYBvc9cqiGIU"
+WEBHOOK_URL = "https://rafflecalcbot-production-46d1.up.railway.app"
 
 PORT = int(os.environ.get("PORT", 8443))
 
